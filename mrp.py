@@ -28,6 +28,14 @@ class MRP():
             return (next_state,0.1)
 
 
+def td_learning(traj_list, num_states, td_update_fn, lamda, gamma):
+    Vs=np.zeros(num_states)
+    Es=np.zeros(num_states)
+    for episode in traj_list:
+        Vs, Es, lamda_s, gamma_s=td_update_fn(episode,Vs, Es, lamda_s, gamma_s)
+    return Vs, Es, lamda_s, gamma_s
+
+
 num_states=10
 problem=MRP(num_states)
 s=problem.startState()
