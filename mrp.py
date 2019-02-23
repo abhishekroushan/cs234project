@@ -27,13 +27,18 @@ class MRP():
         else:#odd state
             return (next_state,0.1)
 
+#function for td lambda learning
+def td_learning(traj_list, num_states, td_update_fn, lambd, gamma):
+    #initializations
+    Vs      =np.zeros(num_states)
+    Es      =np.zeros(num_states)
+    gamma_s =np.ones(num_states)
+    lambd_s =np.ones(num_states)
 
-def td_learning(traj_list, num_states, td_update_fn, lamda, gamma):
-    Vs=np.zeros(num_states)
-    Es=np.zeros(num_states)
+    #update V, E, lambd, gamma for all states from the td_update_fn
     for episode in traj_list:
-        Vs, Es, lamda_s, gamma_s=td_update_fn(episode,Vs, Es, lamda_s, gamma_s)
-    return Vs, Es, lamda_s, gamma_s
+        Vs, Es, lambd_s, gamma_s=td_update_fn(episode,Vs, Es, lambd_s, gamma_s)
+    return Vs, Es, lambd_s, gamma_s
 
 
 num_states=10
