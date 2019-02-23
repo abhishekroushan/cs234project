@@ -3,31 +3,6 @@ MRP class for realizing state action model
 """
 import numpy as np
 import matplotlib.pyplot as plt
-'''
-state_values = np.zeros(n_states) # initial guess = 0 value
-eligibility = np.zeros(n_states)
-
-lamb = 0.95 # the lambda weighting factor
-state = env.reset() # start the environment, get the initial state
-# Run the algorithm for some episodes
-for t in range(n_steps):
-  # act according to policy
-  action = policy(state)
-  new_state, reward, done = env.step(action)
-  # Update eligibilities
-  eligibility *= lamb * gamma
-  eligibility[state] += 1.0
-
-  # get the td-error and update every state's value estimate
-  # according to their eligibilities.
-  td_error = reward + gamma * state_values[new_state] - state_values[state]
-  state_values = state_values + alpha * td_error * eligibility
-
-  if done:
-    state = env.reset()
-  else:
-    state = new_state
-'''	
 
 class MRP():
 	def __init__(self,n):
