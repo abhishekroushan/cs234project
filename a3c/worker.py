@@ -5,6 +5,7 @@ import itertools
 import collections
 import numpy as np
 import tensorflow as tf
+from scipy.linalg import toeplitz
 
 from inspect import getsourcefile
 current_path = os.path.dirname(os.path.abspath(getsourcefile(lambda:0)))
@@ -66,7 +67,7 @@ class Worker(object):
   """
   def __init__(self, name, env, policy_net, value_net, global_counter, discount_factor=0.99, summary_writer=None, max_global_steps=None):
     self.name = name
-    self.discount_factor = discount_factor
+    # self.discount_factor = discount_factor
     self.max_global_steps = max_global_steps
     self.global_step = tf.contrib.framework.get_global_step()
     self.global_policy_net = policy_net
@@ -89,6 +90,9 @@ class Worker(object):
 
     self.vnet_train_op = make_train_op(self.value_net, self.global_value_net)
     self.pnet_train_op = make_train_op(self.policy_net, self.global_policy_net)
+    # TODO
+    # add operator to update gamma
+    self.gamma_train_op = []
 
     self.state = None
 
@@ -116,12 +120,18 @@ class Worker(object):
         return
 
   def _policy_net_predict(self, state, sess):
-    feed_dict = { self.policy_net.states: [state] }
+    gamma = sess.run(self.policy_net.gamma_var)
+    gamma_vector = gamma*np.ones((1, 1))
+    feed_dict = { self.policy_net.states: [state], 
+                 self.policy_net.gamma_ph: gamma_vector }
     preds = sess.run(self.policy_net.predictions, feed_dict)
     return preds["probs"][0]
 
   def _value_net_predict(self, state, sess):
-    feed_dict = { self.value_net.states: [state] }
+    gamma = sess.run(self.value_net.gamma_var)
+    gamma_vector = gamma*np.ones((1, 1))
+    feed_dict = { self.value_net.states: [state],
+                 self.value_net.gamma_ph: gamma_vector}
     preds = sess.run(self.value_net.predictions, feed_dict)
     return preds["logits"][0]
 
@@ -162,31 +172,42 @@ class Worker(object):
     """
 
     # If we episode was not done we bootstrap the value from the last state
-    reward = 0.0
+    reward = 0.
+    T = len(transitions)
     if not transitions[-1].done:
       reward = self._value_net_predict(transitions[-1].next_state, sess)
+    rew_matrix = np.diag([reward]*(T + 1))
+    rew_matrix = rew_matrix[1:,:]
+    col_list = [trans.reward for trans in transitions[::-1]]
+    row_list = [0.]*(T + 1)
+    row_list[0] = col_list[0]
+    row_list[1] = reward
+    rew_matrix = rew_matrix + toeplitz(col_list, row_list)
+    powers = np.arange(0,T + 1)
 
     # Accumulate minibatch exmaples
-    states = []
-    policy_targets = []
-    value_targets = []
-    actions = []
-
-    for transition in transitions[::-1]:
-      reward = transition.reward + self.discount_factor * reward
-      policy_target = (reward - self._value_net_predict(transition.state, sess))
-      # Accumulate updates
-      states.append(transition.state)
-      actions.append(transition.action)
-      policy_targets.append(policy_target)
-      value_targets.append(reward)
+    states = np.array([trans.state for trans in transitions[::-1]])
+    actions = [trans.action for trans in transitions[::-1]]
+    
+    gamma = sess.run(self.value_net.gamma_var)
+    gamma_vector = gamma*np.ones((T, 1))
+    
+    Vtest = sess.run(self.value_net.predictions, feed_dict={self.value_net.states: states, self.value_net.gamma_ph: gamma_vector})
+    Vtest = Vtest["logits"]
 
     feed_dict = {
-      self.policy_net.states: np.array(states),
-      self.policy_net.targets: policy_targets,
+      #self.gamma_ph: gamma_vector,
+      self.policy_net.states: states,
       self.policy_net.actions: actions,
-      self.value_net.states: np.array(states),
-      self.value_net.targets: value_targets,
+      self.policy_net.reward_matrix: rew_matrix,
+      self.policy_net.powers: powers,
+      self.policy_net.Vtest: Vtest,
+      self.policy_net.gamma_ph: gamma_vector,
+      self.policy_net.entropy_weight: 0.1,
+      self.value_net.states: states,
+      self.value_net.reward_matrix: rew_matrix,
+      self.value_net.powers: powers,
+      self.value_net.gamma_ph: gamma_vector,
     }
 
     # Train the global estimators using local gradients

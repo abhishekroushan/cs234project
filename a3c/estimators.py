@@ -4,7 +4,7 @@ import collections
 
 Transition = collections.namedtuple("Transition", ["state", "action", "reward", "next_state", "done"])
 
-def build_shared_network(X, gamma_ph, add_summaries=False):
+def build_shared_network(X, add_summaries=False):
   """
   Builds a 3-layer network conv -> conv -> fc as described
   in the A3C paper. This network is shared by both the policy and value net.
@@ -26,17 +26,17 @@ def build_shared_network(X, gamma_ph, add_summaries=False):
     conv1, 32, 4, 2, activation_fn=tf.nn.relu, scope="conv2")
 
   # Fully connected layer
-  fc0 = tf.contrib.layers.fully_connected(
+  fc1 = tf.contrib.layers.fully_connected(
     inputs=tf.contrib.layers.flatten(conv2),
     num_outputs=256,
-    scope="fc0")
+    scope="fc1")
   
-  fc1 = tf.concat([fc0, gamma_ph], axis=1)
+  #fc1 = tf.concat([fc0, gamma_ph], axis=1)
 
   if add_summaries:
     tf.contrib.layers.summarize_activation(conv1)
     tf.contrib.layers.summarize_activation(conv2)
-    tf.contrib.layers.summarize_activation(fc0)
+    tf.contrib.layers.summarize_activation(fc1)
 
   return fc1
 
@@ -44,7 +44,7 @@ def _value_net_predict(self, state, sess):
   feed_dict = { self.value_net.states: [state] }
   preds = sess.run(self.value_net.predictions, feed_dict)
   return preds["logits"][0]
-
+'''
 def calc_targets(rew_matrix, gamma_var, states, actions, rewards, next_state, done_mask, vnet):
   """
   Caltulate targets based on collected experience
@@ -74,7 +74,7 @@ def calc_targets(rew_matrix, gamma_var, states, actions, rewards, next_state, do
     value_targets.append(reward)
   
   return policy_targets, value_targets
-
+'''
 
 class PolicyEstimator():
   """
@@ -118,13 +118,13 @@ class PolicyEstimator():
 
     # Graph shared with Value Net
     with tf.variable_scope("shared", reuse=reuse):
-      self.gamma_var = tf.Variable(gamma_init, dtype=tf.float32, name="gamma_var")
       self.gamma_var = tf.get_variable("gamma_var", shape=[], dtype=tf.float32, initializer=tf.constant_initializer(gamma_init))
-      fc1 = build_shared_network(X, self.gamma_ph, add_summaries=(not reuse))
+      fc1 = build_shared_network(X, add_summaries=(not reuse))
+      fc2 = tf.concat([fc1, self.gamma_ph], axis=1)
 
 
     with tf.variable_scope("policy_net"):
-      self.logits = tf.contrib.layers.fully_connected(fc1, num_outputs, activation_fn=None)
+      self.logits = tf.contrib.layers.fully_connected(fc2, num_outputs, activation_fn=None)
       self.probs = tf.nn.softmax(self.logits) + 1e-8
 
       self.predictions = {
@@ -153,15 +153,17 @@ class PolicyEstimator():
 
       if trainable:
         # TODO
-        # add gamma and second order derivative here
+        # add gamma and second order derivative
         # self.optimizer = tf.train.AdamOptimizer(1e-4)
         self.optimizer = tf.train.RMSPropOptimizer(0.00025, 0.99, 0.0, 1e-6)
-        self.grads_and_vars = self.optimizer.compute_gradients(self.loss)
-        self.grads_and_vars_net = [[grad, var] for grad, var in self.grads_and_vars if grad is not None and 'gamma_var' not in var.name]
-        self.train_op = self.optimizer.apply_gradients(self.grads_and_vars_net,
+        self.grads_and_vars_all = self.optimizer.compute_gradients(self.loss)
+        self.grads_and_vars = [[grad, var] for grad, var in self.grads_and_vars_all if grad is not None and 'gamma_var' not in var.name]
+        self.train_op = self.optimizer.apply_gradients(self.grads_and_vars,
           global_step=tf.contrib.framework.get_global_step())
-        self.second_grads = self.optimizer.compute_gradients(self.grads_and_vars, self.gamma_var)
-        
+        # TODO
+        # a bug here
+        self.second_grads = []
+        self.train_op_gamma = []
 
     # Merge summaries from this network and the shared network (but not the value net)
     var_scope_name = tf.get_variable_scope().name
@@ -176,7 +178,7 @@ class PolicyEstimator():
     gamma_vector = tf.pow(self.gamma_var, powers)
     #gamma_vector = tf.stack([tf.pow(self.gamma_var, _i) for _i in powers])
     gamma_vector = tf.reshape(gamma_vector, [-1, 1])
-    return tf.multiply(rew_matrix, gamma_vector)
+    return tf.matmul(rew_matrix, gamma_vector)
         
 
 
@@ -205,11 +207,12 @@ class ValueEstimator():
     # Graph shared with Value Net
     with tf.variable_scope("shared", reuse=reuse):
       self.gamma_var = tf.get_variable("gamma_var", shape=[], dtype=tf.float32)
-      fc1 = build_shared_network(X, self.gamma_ph, add_summaries=(not reuse))
+      fc1 = build_shared_network(X, add_summaries=(not reuse))
+      fc2 = tf.concat([fc1, self.gamma_ph], axis=1)
 
     with tf.variable_scope("value_net"):
       self.logits = tf.contrib.layers.fully_connected(
-        inputs=fc1,
+        inputs=fc2,
         num_outputs=1,
         activation_fn=None)
       self.logits = tf.squeeze(self.logits, squeeze_dims=[1], name="logits")
@@ -254,4 +257,4 @@ class ValueEstimator():
     gamma_vector = tf.pow(self.gamma_var, powers)
     #gamma_vector = tf.stack([tf.pow(self.gamma_var, _i) for _i in powers])
     gamma_vector = tf.reshape(gamma_vector, [-1, 1])
-    return tf.multiply(rew_matrix, gamma_vector)
+    return tf.matmul(rew_matrix, gamma_vector)
