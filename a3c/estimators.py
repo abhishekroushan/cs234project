@@ -40,10 +40,6 @@ def build_shared_network(X, add_summaries=False):
 
   return fc1
 
-def _value_net_predict(self, state, sess):
-  feed_dict = { self.value_net.states: [state] }
-  preds = sess.run(self.value_net.predictions, feed_dict)
-  return preds["logits"][0]
 '''
 def calc_targets(rew_matrix, gamma_var, states, actions, rewards, next_state, done_mask, vnet):
   """
@@ -108,7 +104,7 @@ class PolicyEstimator():
     
     # placeholder for embedding of gamma (as part of input)
     self.gamma_ph = tf.placeholder(shape=[None, gamma_emb_size], dtype=tf.float32, name="gamma_ph")
-    
+    self.external_grad = {}
     
     self.entropy_weight = tf.placeholder(shape=[], dtype=tf.float32, name="entropy_weight")
 
@@ -156,6 +152,7 @@ class PolicyEstimator():
         # add gamma and second order derivative
         # self.optimizer = tf.train.AdamOptimizer(1e-4)
         self.optimizer = tf.train.RMSPropOptimizer(0.00025, 0.99, 0.0, 1e-6)
+        self.optimizer_gamma = tf.train.AdamOptimizer(1e-5)
         self.grads_and_vars_all = self.optimizer.compute_gradients(self.loss)
         self.grads_and_vars = [[grad, var] for grad, var in self.grads_and_vars_all if grad is not None and 'gamma_var' not in var.name]
         self.train_op = self.optimizer.apply_gradients(self.grads_and_vars,
@@ -163,7 +160,12 @@ class PolicyEstimator():
         # TODO
         # a bug here
         self.second_grads = []
-        self.train_op_gamma = []
+        for grad, var in self.grads_and_vars:
+            self.external_grad[var.name] = tf.placeholder(shape=grad.get_shape().as_list(), dtype=tf.float32)
+            self.second_grads.append(tf.gradients(grad, self.gamma_var, grad_ys=self.external_grad[var.name]))
+        self.second_grad = tf.reduce_sum(self.second_grads)
+        self.grad_and_var_gamma = [(self.second_grad, self.gamma_var)]
+        self.train_op_gamma = self.optimizer.apply_gradients(self.grad_and_var_gamma)
 
     # Merge summaries from this network and the shared network (but not the value net)
     var_scope_name = tf.get_variable_scope().name
