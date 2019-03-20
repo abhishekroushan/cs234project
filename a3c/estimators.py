@@ -104,7 +104,7 @@ class PolicyEstimator():
     
     # placeholder for embedding of gamma (as part of input)
     self.gamma_ph = tf.placeholder(shape=[None, gamma_emb_size], dtype=tf.float32, name="gamma_ph")
-    self.external_grad = {}
+    self.external_grad = []
     
     self.entropy_weight = tf.placeholder(shape=[], dtype=tf.float32, name="entropy_weight")
 
@@ -161,8 +161,8 @@ class PolicyEstimator():
         # a bug here
         self.second_grads = []
         for grad, var in self.grads_and_vars:
-            self.external_grad[var.name] = tf.placeholder(shape=grad.get_shape().as_list(), dtype=tf.float32)
-            self.second_grads.append(tf.gradients(grad, self.gamma_var, grad_ys=self.external_grad[var.name]))
+            self.external_grad.append(tf.placeholder(shape=grad.get_shape().as_list(), dtype=tf.float32))
+            self.second_grads.append(tf.gradients(grad, self.gamma_var, grad_ys=self.external_grad[-1]))
         self.second_grad = tf.reduce_sum(self.second_grads)
         self.grad_and_var_gamma = [(self.second_grad, self.gamma_var)]
         self.train_op_gamma = self.optimizer.apply_gradients(self.grad_and_var_gamma)

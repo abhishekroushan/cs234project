@@ -37,7 +37,7 @@ def make_copy_params_op(v1_list, v2_list):
 
   return update_ops
 
-def make_train_op(local_estimator, global_estimator):
+def make_train_op(local_estimator, global_estimator, _optimizer):
   """
   Creates an op that applies local estimator gradients
   to the global estimator.
@@ -47,7 +47,7 @@ def make_train_op(local_estimator, global_estimator):
   local_grads, _ = tf.clip_by_global_norm(local_grads, 5.0)
   _, global_vars = zip(*global_estimator.grads_and_vars)
   local_global_grads_and_vars = list(zip(local_grads, global_vars))
-  return global_estimator.optimizer.apply_gradients(local_global_grads_and_vars,
+  return _optimizer.apply_gradients(local_global_grads_and_vars,
           global_step=tf.contrib.framework.get_global_step())
 
 
@@ -88,11 +88,11 @@ class Worker(object):
       tf.contrib.slim.get_variables(scope="global", collection=tf.GraphKeys.TRAINABLE_VARIABLES),
       tf.contrib.slim.get_variables(scope=self.name+'/', collection=tf.GraphKeys.TRAINABLE_VARIABLES))
 
-    self.vnet_train_op = make_train_op(self.value_net, self.global_value_net)
-    self.pnet_train_op = make_train_op(self.policy_net, self.global_policy_net)
+    self.vnet_train_op = make_train_op(self.value_net, self.global_value_net, self.global_value_net.optimizer)
+    self.pnet_train_op = make_train_op(self.policy_net, self.global_policy_net, self.global_policy_net.optimizer)
     # TODO
     # add operator to update gamma
-    self.gamma_train_op = []
+    self.gamma_train_op = make_train_op(self.policy_net, self.global_policy_net, self.global_policy_net.optimizer_gamma)
 
     self.state = None
 
@@ -112,9 +112,15 @@ class Worker(object):
             tf.logging.info("Reached global step {}. Stopping.".format(global_t))
             coord.request_stop()
             return
-
+        
+          new_grads_and_vars = self.update(transitions, sess, update_case="local")
+          sess.run(self.copy_params_op)
+          
+          self.update(transitions, sess, update_case="gamma", grads_and_vars=new_grads_and_vars)
+          
+          
           # Update the global networks
-          self.update(transitions, sess)
+          self.update(transitions, sess, update_case="global")
 
       except tf.errors.CancelledError:
         return
@@ -162,7 +168,32 @@ class Worker(object):
         self.state = next_state
     return transitions, local_t, global_t
 
-  def update(self, transitions, sess):
+  def calc_placeholders(self, transitions, sess):
+    reward = 0.
+    T = len(transitions)
+    if not transitions[-1].done:
+      reward = self._value_net_predict(transitions[-1].next_state, sess)
+    rew_matrix = np.diag([reward]*(T + 1))
+    rew_matrix = rew_matrix[1:,:]
+    col_list = [trans.reward for trans in transitions[::-1]]
+    row_list = [0.]*(T + 1)
+    row_list[0] = col_list[0]
+    row_list[1] = reward
+    rew_matrix = rew_matrix + toeplitz(col_list, row_list)
+    powers = np.arange(0,T + 1)
+
+    # Accumulate minibatch exmaples
+    states = np.array([trans.state for trans in transitions[::-1]])
+    actions = [trans.action for trans in transitions[::-1]]
+    
+    gamma = sess.run(self.value_net.gamma_var)
+    gamma_vector = gamma*np.ones((T, 1))
+    
+    Vtest = sess.run(self.value_net.predictions, feed_dict={self.value_net.states: states, self.value_net.gamma_ph: gamma_vector})
+    Vtest = Vtest["logits"]
+    return rew_matrix, powers, states, actions, gamma_vector, Vtest
+
+  def update(self, transitions, sess, update_case='global', grads_and_vars=None):
     """
     Updates global policy and value networks based on collected experience
 
@@ -170,7 +201,7 @@ class Worker(object):
       transitions: A list of experience transitions
       sess: A Tensorflow session
     """
-
+    """
     # If we episode was not done we bootstrap the value from the last state
     reward = 0.
     T = len(transitions)
@@ -194,7 +225,10 @@ class Worker(object):
     
     Vtest = sess.run(self.value_net.predictions, feed_dict={self.value_net.states: states, self.value_net.gamma_ph: gamma_vector})
     Vtest = Vtest["logits"]
-
+    """
+    rew_matrix, powers, states, actions, gamma_vector, Vtest = self.calc_placeholders(transitions, sess)
+    
+    
     feed_dict = {
       #self.gamma_ph: gamma_vector,
       self.policy_net.states: states,
@@ -209,22 +243,50 @@ class Worker(object):
       self.value_net.powers: powers,
       self.value_net.gamma_ph: gamma_vector,
     }
+    if update_case == "global":
+      # Train the global estimators using local gradients
+      global_step, pnet_loss, vnet_loss, _, _, pnet_summaries, vnet_summaries = sess.run([
+        self.global_step,
+        self.policy_net.loss,
+        self.value_net.loss,
+        self.pnet_train_op,
+        self.vnet_train_op,
+        self.policy_net.summaries,
+        self.value_net.summaries
+      ], feed_dict)
 
-    # Train the global estimators using local gradients
-    global_step, pnet_loss, vnet_loss, _, _, pnet_summaries, vnet_summaries = sess.run([
-      self.global_step,
-      self.policy_net.loss,
-      self.value_net.loss,
-      self.pnet_train_op,
-      self.vnet_train_op,
-      self.policy_net.summaries,
-      self.value_net.summaries
-    ], feed_dict)
+      # Write summaries
+      if self.summary_writer is not None:
+        self.summary_writer.add_summary(pnet_summaries, global_step)
+        self.summary_writer.add_summary(vnet_summaries, global_step)
+        self.summary_writer.flush()
 
-    # Write summaries
-    if self.summary_writer is not None:
-      self.summary_writer.add_summary(pnet_summaries, global_step)
-      self.summary_writer.add_summary(vnet_summaries, global_step)
-      self.summary_writer.flush()
+      return pnet_loss, vnet_loss, pnet_summaries, vnet_summaries
+    elif update_case == "local": # only update local network to generate auxilliary trajectories, then take derivative wrt new params at new loss function
 
-    return pnet_loss, vnet_loss, pnet_summaries, vnet_summaries
+      feed_dict_new = {
+        #self.gamma_ph: gamma_vector,
+        self.policy_net.states: states,
+        self.policy_net.actions: actions,
+        self.policy_net.reward_matrix: rew_matrix,
+        self.policy_net.powers: powers,
+        self.policy_net.Vtest: Vtest,
+        self.policy_net.gamma_ph: gamma_vector,
+        self.policy_net.entropy_weight: 0.,
+        self.value_net.states: states,
+        self.value_net.reward_matrix: rew_matrix,
+        self.value_net.powers: powers,
+        self.value_net.gamma_ph: gamma_vector,
+      }
+      sess.run([self.policy_net.train_op, self.value_net.train_op], feed_dict)
+      new_transitions, _, _ = self.run_n_steps(5, sess)
+      new_rew_matrix, new_powers, new_states, new_actions, new_gamma_vector, new_Vtest = self.calc_placeholders(new_transitions, sess)
+      return sess.run(self.policy_net.grads_and_vars, feed_dict_new)
+    else: # update gamma
+      feed_dict_new = feed_dict
+      _i = 0
+      for grad, var in grads_and_vars:
+        feed_dict_new[self.policy_net.external_grad[_i]]=grad
+        _i += 1
+      sess.run(self.gamma_train_op, feed_dict_new)
+    return

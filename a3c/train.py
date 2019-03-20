@@ -31,7 +31,7 @@ def del_all_flags(FLAGS):
 
 del_all_flags(tf.flags.FLAGS)
 
-tf.flags.DEFINE_string("model_dir", "/tmp/a3c", "Directory to write Tensorboard summaries and videos to.")
+tf.flags.DEFINE_string("model_dir", "./tmp/a3c", "Directory to write Tensorboard summaries and videos to.")
 tf.flags.DEFINE_string("env", "Breakout-v0", "Name of gym Atari environment, e.g. Breakout-v0")
 tf.flags.DEFINE_integer("t_max", 5, "Number of steps before performing an update")
 tf.flags.DEFINE_integer("max_global_steps", None, "Stop training after this many steps in the environment. Defaults to running indefinitely.")
