@@ -1,3 +1,22 @@
 CS234: Reinforcement Learning Project
 
 Title: Meta learning convergence with Dual primal modified objective
+
+Abstract:
+In this project, we try to address the question of ``What is the best form of reward function for an agent to maximize?'' while trying to bypass the double-sampling requirement to minimize the learning objective. The work mainly includes two parts. In the first part, we apply the meta-gradient method to A3C algorithm and show that our learning agents could intelligently choose the discount factor gamma during the training process. After that, we propose an algorithm based on the primal-dual formation of the objective function to alleviate the need of double sampling in the meta-gradient method. The proposed algorithm is tested on a toy markov reward processes and shown effective.
+
+Run Instructions:
+
+1. Toy MRPs (Markov Reward Processes)
+File: mrp.py
+> python mrp.py
+
+Includes: All the toy MRP related experiments with different class methods for Primal dual square conjugate
+
+
+
+2. Atari Environment experiments:
+Folder: ./a3c/
+
+Includes: The setup and environment for running A3C algorithm in the Atari gym environment setting.
+The files names are explanatory of the purpose they serve. Run instructions in a3c/train.py
